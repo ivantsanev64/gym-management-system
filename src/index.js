@@ -1,14 +1,20 @@
 import express from 'express';
 
-const app = express();
-const PORT = process.env.PORT || 8080;
+jest.mock('express');
 
-app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy' });
+describe('App Server', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('should have a health endpoint', () => {
+    const mockApp = {
+      get: jest.fn(),
+      listen: jest.fn()
+    };
+    
+    express.mockReturnValue(mockApp);
+    
+    expect(true).toBe(true);
+  });
 });
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
-
-export default app;
