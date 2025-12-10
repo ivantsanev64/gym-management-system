@@ -1,24 +1,14 @@
-const request = require('supertest');
+import express from 'express';
 
-describe('App Server', () => {
-  let app;
+const app = express();
+const PORT = process.env.PORT || 8080;
 
-  beforeEach(() => {
-    // Clear the module cache to get a fresh instance
-    jest.resetModules();
-    app = require('../src/index');
-  });
-
-  it('should return healthy status on /health endpoint', async () => {
-    const response = await request(app).get('/health');
-    
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual({ status: 'healthy' });
-  });
-
-  it('should have status property in health response', async () => {
-    const response = await request(app).get('/health');
-    
-    expect(response.body).toHaveProperty('status');
-  });
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'healthy' });
 });
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+export default app;

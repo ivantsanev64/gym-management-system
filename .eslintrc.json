@@ -14,8 +14,6 @@
     "sourceType": "module"
   },
   "rules": {
-    "@typescript-eslint/no-require-imports": "off",
-    "@typescript-eslint/no-var-requires": "off",
     "no-console": ["warn", { "allow": ["warn", "error"] }],
     "no-unused-vars": "off",
     "@typescript-eslint/no-unused-vars": ["error"],
@@ -25,12 +23,5 @@
     "indent": ["error", 2],
     "quotes": ["error", "single"],
     "semi": ["error", "always"]
-  },
-  "globals": {
-    "require": "readonly",
-    "module": "readonly",
-    "process": "readonly",
-    "__dirname": "readonly",
-    "__filename": "readonly"
   }
 }
