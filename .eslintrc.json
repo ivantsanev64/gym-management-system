@@ -1,7 +1,8 @@
 {
   "env": {
     "node": true,
-    "es2021": true
+    "es2021": true,
+    "jest": true
   },
   "extends": [
     "eslint:recommended",
@@ -24,5 +25,12 @@
     "indent": ["error", 2],
     "quotes": ["error", "single"],
     "semi": ["error", "always"]
+  },
+  "globals": {
+    "require": "readonly",
+    "module": "readonly",
+    "process": "readonly",
+    "__dirname": "readonly",
+    "__filename": "readonly"
   }
 }
