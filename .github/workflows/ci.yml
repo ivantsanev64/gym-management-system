@@ -1,0 +1,293 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ develop, main, release/* ]
+  pull_request:
+    branches: [ develop, main ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  NODE_VERSION: '18'
+
+jobs:
+  # Job 1: Setup and Code Quality
+  quality-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --frozen-lockfile
+
+      - name: Lint code
+        run: npm run lint
+
+      - name: Check code formatting
+        run: npm run format:check
+
+      - name: SonarQube scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # Job 2: Unit & Integration Tests
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: gym_test
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_pass
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --frozen-lockfile
+
+      - name: Run unit tests
+        run: npm run test:unit -- --coverage
+        env:
+          NODE_ENV: test
+
+      - name: Run integration tests
+        run: npm run test:integration
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://test_user:test_pass@localhost:5432/gym_test
+          REDIS_URL: redis://localhost:6379
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage/lcov.info
+          flags: unittests
+          name: codecov-umbrella
+
+  # Job 3: Build Docker Image
+  build:
+    needs: [quality-checks, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Job 4: Security Scanning
+  security-scan:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Check for high/critical vulnerabilities
+        run: |
+          if grep -q "HIGH\|CRITICAL" trivy-results.sarif; then
+            echo "High or Critical vulnerabilities found!"
+            exit 1
+          fi
+
+  # Job 5: Deployment Approval (Manual Gate)
+  deployment-approval:
+    if: github.ref == 'refs/heads/main'
+    needs: security-scan
+    runs-on: ubuntu-latest
+    environment:
+      name: production-approval
+    steps:
+      - name: Deployment Approved
+        run: echo "Deployment approved for production"
+
+  # Job 6: Deploy to Production (Blue-Green)
+  deploy-production:
+    if: github.ref == 'refs/heads/main'
+    needs: deployment-approval
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Deploy to GREEN via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.4
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: ./dist/
+          server-dir: /home/deploy/gym-app-green/
+          state-name: .ftp-deploy-sync-state.json
+          dry-run: false
+
+      - name: Pull and start GREEN container
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.GREEN_SERVER }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          script: |
+            cd /home/deploy/gym-app-green
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            docker-compose -f docker-compose.prod.yml pull
+            docker-compose -f docker-compose.prod.yml up -d gym-app-green
+
+      - name: Health checks on GREEN
+        run: |
+          for i in {1..30}; do
+            if curl -f http://${{ secrets.GREEN_SERVER }}:8080/health; then
+              echo "GREEN environment is healthy"
+              exit 0
+            fi
+            echo "Waiting for GREEN to be ready... ($i/30)"
+            sleep 10
+          done
+          echo "GREEN environment failed health check"
+          exit 1
+
+      - name: Smoke tests on GREEN
+        run: npm run test:smoke -- --baseUrl=http://${{ secrets.GREEN_SERVER }}:8080
+
+      - name: Switch load balancer to GREEN
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.LB_SERVER }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          script: |
+            sudo sed -i 's/upstream backend {/upstream backend {\n  server ${{ secrets.GREEN_SERVER }}:8080 max_fails=3 fail_timeout=30s;/g' /etc/nginx/load-balancer.conf
+            sudo nginx -t && sudo systemctl reload nginx
+            echo "Traffic switched to GREEN"
+
+      - name: Monitor deployment
+        run: |
+          for i in {1..12}; do
+            ERROR_RATE=$(curl -s http://${{ secrets.LB_SERVER }}/metrics | grep http_requests_errors | grep -oP '\d+\.\d+')
+            if (( $(echo "$ERROR_RATE > 2.0" | bc -l) )); then
+              echo "Error rate exceeded 2%. Initiating rollback..."
+              exit 1
+            fi
+            echo "Monitoring... Error rate: ${ERROR_RATE}% ($i/12)"
+            sleep 10
+          done
+
+      - name: Deployment Success Notification
+        if: success()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: 'Production deployment successful!'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          fields: repo,message,commit,author,action
+
+      - name: Deployment Failure - Initiate Rollback
+        if: failure()
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.LB_SERVER }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          script: |
+            echo "Switching traffic back to BLUE"
+            sudo sed -i 's/upstream backend {/upstream backend {\n  server ${{ secrets.BLUE_SERVER }}:8080 max_fails=3 fail_timeout=30s;/g' /etc/nginx/load-balancer.conf
+            sudo nginx -t && sudo systemctl reload nginx
+
+      - name: Rollback Notification
+        if: failure()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          text: 'Production deployment failed! Rolled back to BLUE.'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          fields: repo,message,commit,author,action

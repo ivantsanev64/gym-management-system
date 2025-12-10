@@ -1,0 +1,20 @@
+name: Build Docker Image (Reusable)
+
+on:
+  workflow_call:
+    outputs:
+      image-tag:
+        description: "Docker image tag"
+        value: ${{ jobs.build.outputs.image-tag }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Build image
+        run: docker build -t gym-app:latest .
