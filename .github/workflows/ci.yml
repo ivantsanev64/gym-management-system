@@ -7,8 +7,6 @@ on:
     branches: [ develop, main ]
   workflow_call:  
     secrets:
-      GITHUB_TOKEN:
-        required: true
       SONAR_TOKEN:
         required: false
 
