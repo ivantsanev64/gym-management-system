@@ -6,7 +6,11 @@ on:
   pull_request:
     branches: [ develop, main ]
   workflow_call:  
-    secrets: inherit
+    secrets:
+      GITHUB_TOKEN:
+        required: true
+      SONAR_TOKEN:
+        required: false
 
 env:
   REGISTRY: ghcr.io
