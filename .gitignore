@@ -39,4 +39,4 @@ temp/
 *.tmp
 
 # Excess files
-*.pdf
+deploy_key
