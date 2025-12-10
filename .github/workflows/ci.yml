@@ -5,6 +5,8 @@ on:
     branches: [ develop, main, release/* ]
   pull_request:
     branches: [ develop, main ]
+  workflow_call:  
+    secrets: inherit
 
 env:
   REGISTRY: ghcr.io
